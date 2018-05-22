@@ -1,7 +1,9 @@
 (ns my-exercise.home
   (:require [hiccup.page :refer [html5]]
             [ring.util.anti-forgery :refer [anti-forgery-field]]
-            [my-exercise.us-state :as us-state]))
+            [my-exercise.us-state :as us-state])
+  (:require [clojure.java.io :as io]
+            [clojure.edn :as edn]))
 
 (defn header [_]
   [:head
@@ -97,9 +99,9 @@
    (current-elections-link request)])
 
 (defn address-form [_]
-  [:div {:class "address-form"}
+  [:div {:class "address-form" :id "address-form"}
    [:h1 "Find my next election"]
-   [:form {:action "/search" :method "post"}
+   [:form {:action "/search#address-form" :method "post"}
     (anti-forgery-field)
     [:p "Enter the address where you are registered to vote"]
     [:div
@@ -116,10 +118,12 @@
      [:label {:for "city-field"} "City:"]
      [:input {:id "city-field"
               :type "text"
-              :name "city"}]
+              :name "city"
+              :required true}]
      [:label {:for "state-field"} "State:"]
      [:select {:id "state-field"
-               :name "state"}
+               :name "state"
+               :required true}
       [:option ""]
       (for [state us-state/postal-abbreviations]
         [:option {:value state} state])]
@@ -131,8 +135,54 @@
     [:div.button
      [:button {:type "submit"} "Search"]]]])
 
+(defn search-results [request]
+  
+  ;; Generate OCD query
+  (def params (:form-params request))
+  (def ocd_country "ocd-division/country:us")
+  (def ocd_state (str "/state:" (get params "state")))
+  (def ocd_city (clojure.string/replace (str "/place:" (get params "city")) #" " "_"))
+  (def ocd_url (clojure.string/lower-case (str "https://api.turbovote.org/elections/upcoming?district-divisions="
+                                               ocd_country
+                                               "," ocd_country ocd_state
+                                               "," ocd_country ocd_state ocd_city)))
+  ;; TODO: Add county and district lookup.
+  ;; TODO: Stronger validation, maybe through an address lookup service.
+  
+  (def election_data (edn/read-string (slurp ocd_url)))
+  (def desc_seq (map :description election_data))
+  (def url_seq (map :polling-place-url-shortened election_data))
+  (def date_seq (map :date election_data))
+
+  [:div
+   
+    [:h2 "Your Upcoming Elections"]
+    
+    ;; Returning the user to the search form makes it easier to look up multiple addresses.
+    ;; TODO: Fill out other election information. Improve formatting.
+    
+    ;; If no results came back, tell the user. If they did, loop through the data.
+    (if (some? (first desc_seq))
+      (let [x 0]
+        [:div
+         [:h3 (nth desc_seq x)]
+         [:p
+          (str "This election will be on " 
+               (.format (java.text.SimpleDateFormat. "MM/dd/yyyy") (first date_seq)) 
+	            ". Visit ")
+          [:a {:href (nth url_seq x) :target "_blank"} "this page"]
+          (str  " to find your polling place.")]])
+      [:div 
+       [:p "You have no upcoming elections."]])
+		  
+		]
+  )
+  ;; Thanks for the opportunity to apply!
+
 (defn page [request]
   (html5
    (header request)
    (instructions request)
-   (address-form request)))
+   (address-form request)
+   (if (seq (:form-params request)) ;; Don't show result information unless there are form params passed in.
+    (search-results request))))
